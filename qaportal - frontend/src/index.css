@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+html {
+  font-size: clamp(12px, 1vw, 16px);
+}
+
+button,
+input[type="button"],
+input[type="submit"],
+input[type="reset"] {
+  cursor: pointer;
+}

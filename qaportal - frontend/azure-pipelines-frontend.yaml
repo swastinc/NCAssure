@@ -1,0 +1,91 @@
+trigger:
+  branches:
+    include:
+      - master
+  paths:
+    include:
+      - "qaportal - frontend/**"
+      - "azure-pipelines-frontend.yml"
+
+pr:
+  branches:
+    include:
+      - master
+  paths:
+    include:
+      - "qaportal - frontend/**"
+      - "azure-pipelines-frontend.yml"
+
+variables:
+  ACR_SERVICE_CONNECTION: "SC-ACR"
+  IMAGE_REPOSITORY: "qaportal-frontend"
+  AZURE_SUBSCRIPTION: "SC-AZURE"
+  DOCKERFILE_PATH: "qaportal - frontend/Dockerfile"
+  BUILD_CONTEXT: "qaportal - frontend"
+  APP_SERVICE_NAME: "ncqaportal"
+  RESOURCE_GROUP: "res-qaportal"
+  DEPLOY_TAG: "2.0"
+  TRACE_TAG: "$(Build.BuildId)"
+
+  ENV_FILE: ".env.production"
+
+pool:
+  vmImage: "ubuntu-latest"
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+
+  # Debug (remove later)
+  - script: |
+      echo "Repo root:"
+      ls -la
+      echo "Frontend folder:"
+      ls -la "qaportal - frontend" || true
+      echo "Dockerfile:"
+      ls -la "qaportal - frontend/Dockerfile" || true
+      echo "Env file (if committed):"
+      ls -la "qaportal - frontend/$(ENV_FILE)" || true
+    displayName: "Debug: verify frontend files exist"
+
+  # PR build only (no push)
+  - task: Docker@2
+    displayName: "Frontend: Docker build (PR validation)"
+    condition: ne(variables['Build.SourceBranch'], 'refs/heads/master')
+    inputs:
+      command: build
+      repository: "$(IMAGE_REPOSITORY)"
+      Dockerfile: "$(DOCKERFILE_PATH)"
+      buildContext: "$(BUILD_CONTEXT)"
+      tags: |
+        $(TRACE_TAG)
+      arguments: |
+        --build-arg ENV_FILE=$(ENV_FILE)
+
+  # master build + push
+  - task: Docker@2
+    displayName: "Frontend: Build & Push to ACR (tags: 2.0 + BuildId)"
+    condition: eq(variables['Build.SourceBranch'], 'refs/heads/master')
+    inputs:
+      command: buildAndPush
+      containerRegistry: "$(ACR_SERVICE_CONNECTION)"
+      repository: "$(IMAGE_REPOSITORY)"
+      Dockerfile: "$(DOCKERFILE_PATH)"
+      buildContext: "$(BUILD_CONTEXT)"
+      tags: |
+        $(DEPLOY_TAG)
+        $(TRACE_TAG)
+      arguments: |
+        --build-arg ENV_FILE=$(ENV_FILE)
+  
+
+  - task: AzureCLI@2
+    displayName: "Restart App Service"
+    condition: eq(variables['Build.SourceBranch'], 'refs/heads/master')
+    inputs:
+      azureSubscription: "$(AZURE_SUBSCRIPTION)"
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        echo "Restarting App Service: $(APP_SERVICE_NAME)"
+        az webapp restart --resource-group "$(RESOURCE_GROUP)" --name "$(APP_SERVICE_NAME)"

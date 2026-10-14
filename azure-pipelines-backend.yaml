@@ -1,0 +1,115 @@
+trigger:
+  branches:
+    include:
+      - master
+  paths:
+    include:
+      - "qaportal - backend/**"
+      - "azure-pipelines-backend.yml"
+
+pr:
+  branches:
+    include:
+      - master
+  paths:
+    include:
+      - "qaportal - backend/**"
+      - "azure-pipelines-backend.yml"
+
+variables:
+  IMAGE_REPOSITORY: "qaportal-backend"
+  ACR_NAME: "qaportalregistry"
+  AZURE_SUBSCRIPTION: "SC-AZURE"
+  ACR_LOGIN_SERVER: "qaportalregistry.azurecr.io"
+  DOCKERFILE_PATH: "qaportal - backend/Dockerfile"
+  BUILD_CONTEXT: "qaportal - backend"
+
+  DEPLOY_TAG: "2.0"
+  TRACE_TAG: "$(Build.BuildId)"
+  APP_SERVICE_NAME: "qaportalbackendservices"
+  RESOURCE_GROUP: "res-qaportal"
+
+pool:
+  vmImage: "ubuntu-latest"
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+
+  - script: |
+      echo "Repo root:"
+      ls -la
+      echo "Folder with spaces:"
+      ls -la "qaportal - backend" || true
+      echo "Dockerfile:"
+      ls -la "qaportal - backend/Dockerfile" || true
+    displayName: "Debug: verify Dockerfile exists"
+
+  - task: Maven@3
+    displayName: "Backend: mvn clean package (skip tests)"
+    inputs:
+      mavenPomFile: "qaportal - backend/pom.xml"
+      goals: "clean package"
+      options: "-DskipTests"
+      javaHomeOption: "JDKVersion"
+      jdkVersionOption: "1.17"
+      mavenVersionOption: "Default"
+
+  - script: |
+      echo "Checking backend target:"
+      ls -la "qaportal - backend/target" || true
+    displayName: "Debug: verify JAR exists"
+
+  # PR build only, no push
+  - task: Docker@2
+    displayName: "Backend: Docker build (PR validation)"
+    condition: ne(variables['Build.SourceBranch'], 'refs/heads/master')
+    inputs:
+      command: build
+      repository: "$(IMAGE_REPOSITORY)"
+      Dockerfile: "$(DOCKERFILE_PATH)"
+      buildContext: "$(BUILD_CONTEXT)"
+      tags: |
+        $(TRACE_TAG)
+
+  # Login to ACR using Azure service connection instead of SC-ACR Docker connection
+  - task: AzureCLI@2
+    displayName: "Backend: Login to ACR"
+    condition: eq(variables['Build.SourceBranch'], 'refs/heads/master')
+    inputs:
+      azureSubscription: "$(AZURE_SUBSCRIPTION)"
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        echo "Logging in to ACR: $(ACR_NAME)"
+        az acr login --name "$(ACR_NAME)"
+
+  # Master build + push using docker CLI
+  - script: |
+      echo "Building backend Docker image..."
+
+      docker build \
+        -f "$(DOCKERFILE_PATH)" \
+        -t "$(ACR_LOGIN_SERVER)/$(IMAGE_REPOSITORY):$(DEPLOY_TAG)" \
+        -t "$(ACR_LOGIN_SERVER)/$(IMAGE_REPOSITORY):$(TRACE_TAG)" \
+        "$(BUILD_CONTEXT)"
+
+      echo "Pushing backend Docker image..."
+
+      docker push "$(ACR_LOGIN_SERVER)/$(IMAGE_REPOSITORY):$(DEPLOY_TAG)"
+      docker push "$(ACR_LOGIN_SERVER)/$(IMAGE_REPOSITORY):$(TRACE_TAG)"
+    displayName: "Backend: Build & Push to ACR (tags: 2.0 + BuildId)"
+    condition: eq(variables['Build.SourceBranch'], 'refs/heads/master')
+
+  - task: AzureCLI@2
+    displayName: "Restart App Service"
+    condition: eq(variables['Build.SourceBranch'], 'refs/heads/master')
+    inputs:
+      azureSubscription: "$(AZURE_SUBSCRIPTION)"
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        echo "Restarting App Service: $(APP_SERVICE_NAME)"
+        az webapp restart \
+          --resource-group "$(RESOURCE_GROUP)" \
+          --name "$(APP_SERVICE_NAME)"

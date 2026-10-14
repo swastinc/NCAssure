@@ -1,0 +1,23 @@
+# dependencies
+node_modules
+.pnpm-store
+**/.pnpm
+**/.pnp
+**/.yarn
+
+# build output
+dist
+build
+
+# misc
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.vscode
+.idea
+.DS_Store
